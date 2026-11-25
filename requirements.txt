@@ -1,0 +1,28 @@
+# ==============================================================================
+# Stock Market Risk & Correlation Analyzer
+# Root Python Dependencies (requirements.txt)
+# ==============================================================================
+
+# Core Web & API Framework
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.6.0
+python-dotenv>=1.0.0
+
+# Market Data Ingestion & Storage
+yfinance>=0.2.37
+pymongo>=4.6.0
+
+# Quantitative & Statistical Computing
+numpy>=1.26.0
+pandas>=2.2.0
+
+# Data Visualization & Notebook Analytics
+matplotlib>=3.8.0
+seaborn>=0.13.0
+jupyter>=1.0.0
+nbformat>=5.9.0
+
+# Testing & HTTP Client
+pytest>=8.0.0
+httpx>=0.27.0

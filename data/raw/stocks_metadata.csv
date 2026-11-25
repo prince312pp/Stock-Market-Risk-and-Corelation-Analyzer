@@ -1,0 +1,11 @@
+symbol,company_name,exchange,sector
+TCS.NS,Tata Consultancy Services,NSE,IT
+INFY.NS,Infosys,NSE,IT
+SOLARINDS.NS,Solar Industries India,NSE,Chemicals & Explosives
+BAJFINANCE.NS,Bajaj Finance,NSE,Financial Services
+TITAN.NS,Titan Company,NSE,Consumer Discretionary
+EICHERMOT.NS,Eicher Motors,NSE,Automobile
+PIDILITIND.NS,Pidilite Industries,NSE,Chemicals & Adhesives
+ASIANPAINT.NS,Asian Paints,NSE,Consumer Goods & Paints
+AJANTPHARM.NS,Ajanta Pharma,NSE,Pharmaceuticals
+HAVELLS.NS,Havells India,NSE,Consumer Electricals

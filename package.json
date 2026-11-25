@@ -1,0 +1,12 @@
+{
+  "name": "stock-market-risk-and-correlation-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stock Market Risk & Correlation Analyzer - Academic Application",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node start.js",
+    "test": "python -m pytest",
+    "build": "cd frontend && node node_modules/typescript/bin/tsc -b && node node_modules/vite/bin/vite.js build"
+  }
+}

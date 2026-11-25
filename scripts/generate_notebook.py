@@ -1,0 +1,569 @@
+import json
+import os
+
+os.makedirs('notebooks', exist_ok=True)
+
+notebook = {
+    "cells": [
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "# Stock Market Risk & Correlation Analyzer\n",
+                "### Quantitative Financial Econometrics, Statistical Battery & Portfolio Optimization\n",
+                "\n",
+                "This notebook provides a fully reproducible, rigorous quantitative statistical analysis of the 10 approved National Stock Exchange of India (NSE) equities:\n",
+                "1. **Descriptive Statistics & Dispersion**: Daily Mean, Median, 5% Trimmed Mean, Bessel's Correction Sample Variance ($ddof=1$), Annualized Volatility ($\\sqrt{252}$), Skewness, Excess Kurtosis.\n",
+                "2. **Parametric & Non-Parametric Confidence Intervals (95%)**: Student's $t$ for Mean Returns, Chi-Square ($\\chi^2$) for Volatility, Fisher $z$-transformation for Pearson correlation.\n",
+                "3. **Econometric Assumption Checks**: Normality (Jarque-Bera, Shapiro-Wilk), Stationarity (Augmented Dickey-Fuller unit root), Serial Independence (Durbin-Watson, Ljung-Box), Autoregressive Conditional Heteroskedasticity (ARCH volatility clustering).\n",
+                "4. **Hypothesis Testing & Standardized Effect Sizes**: Student's $t$-test on returns ($H_0: \\mu = 0$), Cohen's $d$, Annualized Sharpe Ratios ($R_f=6.5\\%$), Pairwise correlation $t$-tests ($H_0: \\rho = 0$) and Coefficient of Determination ($R^2$).\n",
+                "5. **Main Model - Markowitz Modern Portfolio Theory (MPT)**: Analytical two-asset variance formula vs. observed series empirical variance mathematical equivalence proof ($|\\sigma_p^2 - s_{p,\\text{observed}}^2| < 10^{-6}$) and Minimum Variance Portfolio (MVP) optimization curve."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# 1. Environment Setup & Fixed Random Seeds\n",
+                "import os\n",
+                "import sys\n",
+                "import random\n",
+                "import math\n",
+                "import numpy as np\n",
+                "import pandas as pd\n",
+                "import scipy.stats as stats\n",
+                "from statsmodels.tsa.stattools import adfuller\n",
+                "from statsmodels.stats.diagnostic import acorr_ljungbox\n",
+                "from statsmodels.stats.stattools import durbin_watson\n",
+                "import matplotlib.pyplot as plt\n",
+                "import seaborn as sns\n",
+                "\n",
+                "# Enforce fixed random seed for 100% deterministic reproducibility\n",
+                "RANDOM_SEED = 42\n",
+                "random.seed(RANDOM_SEED)\n",
+                "np.random.seed(RANDOM_SEED)\n",
+                "\n",
+                "# Set dark styling consistent with application UI\n",
+                "plt.style.use('seaborn-v0_8-darkgrid' if 'seaborn-v0_8-darkgrid' in plt.style.available else 'default')\n",
+                "plt.rcParams['figure.figsize'] = (12, 6)\n",
+                "plt.rcParams['font.size'] = 10\n",
+                "\n",
+                "print(f\"Reproducibility Seed Initialized: {RANDOM_SEED}\")"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 2. Load Historical Market Data\n",
+                "We load historical daily prices exported directly from the database (`data/raw/historical_prices.csv`)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "df_prices = pd.read_csv('../data/raw/historical_prices.csv')\n",
+                "df_prices['date'] = pd.to_datetime(df_prices['date'])\n",
+                "df_prices = df_prices.sort_values(by=['symbol', 'date']).reset_index(drop=True)\n",
+                "\n",
+                "print(f\"Total Price Records: {len(df_prices)}\")\n",
+                "print(f\"Unique Equities: {df_prices['symbol'].nunique()}\")\n",
+                "print(f\"Date Range: {df_prices['date'].min().strftime('%Y-%m-%d')} to {df_prices['date'].max().strftime('%Y-%m-%d')}\")\n",
+                "df_prices.head()"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 3. Compute Simple Daily Returns\n",
+                "$$\\displaystyle R_t = \\frac{P_t - P_{t-1}}{P_{t-1}}$$\n",
+                "Day 0 for each stock has no preceding price and is dropped (never zero-filled)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Pivot closing prices by date for all 10 stocks\n",
+                "price_matrix = df_prices.pivot(index='date', columns='symbol', values='adjusted_close').dropna()\n",
+                "\n",
+                "# Calculate percentage returns (first day dropped)\n",
+                "returns_matrix = price_matrix.pct_change().dropna()\n",
+                "\n",
+                "print(f\"Aligned Synchronized Sessions (n): {len(returns_matrix)}\")\n",
+                "print(f\"Asset Universe: {list(returns_matrix.columns)}\")\n",
+                "returns_matrix.head()"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 4. Comprehensive Descriptive Statistics & 95% Confidence Intervals\n",
+                "\n",
+                "- **Unbiased Sample Variance (Bessel's Correction, $ddof=1$)**:\n",
+                "  $$\\displaystyle s^2 = \\frac{1}{n-1} \\sum_{t=1}^n (R_t - \\bar{R})^2$$\n",
+                "- **95% Confidence Interval for Mean** (Student's $t$ with $\\nu = n-1$ degrees of freedom):\n",
+                "  $$\\displaystyle \\bar{R} \\pm t_{0.975, n-1} \\cdot \\frac{s}{\\sqrt{n}}$$\n",
+                "- **95% Confidence Interval for Variance** (Chi-Square $\\chi^2$):\n",
+                "  $$\\displaystyle \\left[ \\frac{(n-1)s^2}{\\chi_{0.975, n-1}^2}, \\frac{(n-1)s^2}{\\chi_{0.025, n-1}^2} \\right]$$"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "desc_stats = []\n",
+                "alpha = 0.05\n",
+                "\n",
+                "for sym in returns_matrix.columns:\n",
+                "    r = returns_matrix[sym].values\n",
+                "    n = len(r)\n",
+                "    mean_r = np.mean(r)\n",
+                "    median_r = np.median(r)\n",
+                "    trimmed_mean = stats.trim_mean(r, 0.05)\n",
+                "    var_sample = np.var(r, ddof=1)  # Bessel's correction\n",
+                "    s = np.std(r, ddof=1)\n",
+                "    iqr = stats.iqr(r)\n",
+                "    mad = stats.median_abs_deviation(r)\n",
+                "    ann_vol = s * np.sqrt(252)\n",
+                "    skew = stats.skew(r)\n",
+                "    kurt = stats.kurtosis(r, fisher=True)\n",
+                "    \n",
+                "    # 95% CI for Mean Return (t-distribution)\n",
+                "    t_crit = stats.t.ppf(1 - alpha / 2, df=n - 1)\n",
+                "    se_mean = s / np.sqrt(n)\n",
+                "    ci_mean_lower = mean_r - t_crit * se_mean\n",
+                "    ci_mean_upper = mean_r + t_crit * se_mean\n",
+                "    \n",
+                "    # 95% CI for Variance & Volatility (chi-square distribution)\n",
+                "    chi2_lower = stats.chi2.ppf(alpha / 2, df=n - 1)\n",
+                "    chi2_upper = stats.chi2.ppf(1 - alpha / 2, df=n - 1)\n",
+                "    ci_vol_lower = np.sqrt((n - 1) * var_sample / chi2_upper) * np.sqrt(252)\n",
+                "    ci_vol_upper = np.sqrt((n - 1) * var_sample / chi2_lower) * np.sqrt(252)\n",
+                "    \n",
+                "    desc_stats.append({\n",
+                "        'Symbol': sym,\n",
+                "        'n': n,\n",
+                "        'Daily Mean (%)': mean_r * 100,\n",
+                "        '95% CI Mean (%)': f\"[{ci_mean_lower*100:.3f}%, {ci_mean_upper*100:.3f}%]\",\n",
+                "        'Median (%)': median_r * 100,\n",
+                "        'Trimmed Mean (%)': trimmed_mean * 100,\n",
+                "        'Daily Vol (s %)': s * 100,\n",
+                "        'Ann. Vol (σ %)': ann_vol * 100,\n",
+                "        '95% CI Ann. Vol (%)': f\"[{ci_vol_lower*100:.2f}%, {ci_vol_upper*100:.2f}%]\",\n",
+                "        'Skewness': skew,\n",
+                "        'Excess Kurtosis': kurt\n",
+                "    })\n",
+                "\n",
+                "df_desc = pd.DataFrame(desc_stats)\n",
+                "df_desc"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 5. Econometric Assumption Checks\n",
+                "\n",
+                "### 5.1 Normality Diagnostics (Jarque-Bera & Shapiro-Wilk)\n",
+                "Testing whether returns conform to a Gaussian normal distribution ($H_0$: normality holds):"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "normality_results = []\n",
+                "for sym in returns_matrix.columns:\n",
+                "    r = returns_matrix[sym].values\n",
+                "    jb_stat, jb_pval = stats.jarque_bera(r)\n",
+                "    sw_stat, sw_pval = stats.shapiro(r)\n",
+                "    normality_results.append({\n",
+                "        'Symbol': sym,\n",
+                "        'Jarque-Bera Stat': jb_stat,\n",
+                "        'JB p-value': jb_pval,\n",
+                "        'JB Decision (α=0.05)': 'Reject (Non-normal)' if jb_pval < 0.05 else 'Fail to Reject',\n",
+                "        'Shapiro-Wilk W': sw_stat,\n",
+                "        'SW p-value': sw_pval,\n",
+                "        'SW Decision (α=0.05)': 'Reject (Non-normal)' if sw_pval < 0.05 else 'Fail to Reject'\n",
+                "    })\n",
+                "\n",
+                "df_norm = pd.DataFrame(normality_results)\n",
+                "df_norm"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 5.2 Quantile-Quantile (Q-Q) Plots\n",
+                "Empirical quantiles plotted against standard normal theoretical quantiles illustrate fat tails (leptokurtosis) and tail risk deviations."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "fig, axes = plt.subplots(2, 5, figsize=(18, 8))\n",
+                "axes = axes.flatten()\n",
+                "for idx, sym in enumerate(returns_matrix.columns):\n",
+                "    r = returns_matrix[sym].values\n",
+                "    stats.probplot(r, dist='norm', plot=axes[idx])\n",
+                "    axes[idx].set_title(f'Q-Q Plot: {sym}', fontsize=11, fontweight='bold')\n",
+                "    axes[idx].get_lines()[0].set_markerfacecolor('#3B82F6')\n",
+                "    axes[idx].get_lines()[0].set_markeredgecolor('#1D4ED8')\n",
+                "    axes[idx].get_lines()[0].set_markersize(4.0)\n",
+                "    axes[idx].get_lines()[1].set_color('#EF4444')\n",
+                "    axes[idx].get_lines()[1].set_linewidth(1.8)\n",
+                "plt.tight_layout()\n",
+                "plt.show()"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 5.3 Timeseries Stationarity (Augmented Dickey-Fuller Test)\n",
+                "Testing for unit roots ($H_0$: unit root non-stationary vs. $H_1$: stationary $I(0)$):"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "stationarity_results = []\n",
+                "for sym in returns_matrix.columns:\n",
+                "    p = price_matrix[sym].values\n",
+                "    r = returns_matrix[sym].values\n",
+                "    adf_p = adfuller(p, autolag='AIC', result_object=False)\n",
+                "    adf_r = adfuller(r, autolag='AIC', result_object=False)\n",
+                "    stationarity_results.append({\n",
+                "        'Symbol': sym,\n",
+                "        'Price ADF Stat': adf_p[0],\n",
+                "        'Price p-value': adf_p[1],\n",
+                "        'Price Stationarity': 'Non-Stationary I(1)' if adf_p[1] >= 0.05 else 'Stationary',\n",
+                "        'Return ADF Stat': adf_r[0],\n",
+                "        'Return p-value': adf_r[1],\n",
+                "        'Return Stationarity': 'Stationary I(0)' if adf_r[1] < 0.05 else 'Non-Stationary'\n",
+                "    })\n",
+                "\n",
+                "df_stat = pd.DataFrame(stationarity_results)\n",
+                "df_stat"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 5.4 Serial Independence & Autocorrelation Checks\n",
+                "- **Durbin-Watson ($d \\approx 2.0$)**: First-order serial independence.\n",
+                "- **Ljung-Box**: Cumulative serial correlation across lags 1, 5, 10."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "serial_results = []\n",
+                "for sym in returns_matrix.columns:\n",
+                "    r = returns_matrix[sym].values\n",
+                "    dw = durbin_watson(r - np.mean(r))\n",
+                "    lb = acorr_ljungbox(r, lags=[1, 5, 10], return_df=True)\n",
+                "    serial_results.append({\n",
+                "        'Symbol': sym,\n",
+                "        'Durbin-Watson Stat': dw,\n",
+                "        'DW Interpretation': 'Zero Autocorrelation (Random Walk)' if 1.8 <= dw <= 2.2 else 'Autocorrelated',\n",
+                "        'Ljung-Box Lag 1 p-val': lb.loc[1, 'lb_pvalue'],\n",
+                "        'Ljung-Box Lag 5 p-val': lb.loc[5, 'lb_pvalue'],\n",
+                "        'Ljung-Box Lag 10 p-val': lb.loc[10, 'lb_pvalue']\n",
+                "    })\n",
+                "\n",
+                "df_serial = pd.DataFrame(serial_results)\n",
+                "df_serial"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 5.5 Heteroskedasticity & Volatility Clustering (ARCH Effect)\n",
+                "Testing whether large shocks follow large shocks by evaluating the autocorrelation of demeaned squared returns $(R_t - \\bar{R})^2$."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "arch_results = []\n",
+                "for sym in returns_matrix.columns:\n",
+                "    r = returns_matrix[sym].values\n",
+                "    demeaned_sq = (r - np.mean(r)) ** 2\n",
+                "    sq_autocorr = float(np.corrcoef(demeaned_sq[:-1], demeaned_sq[1:])[0, 1])\n",
+                "    has_clustering = sq_autocorr > 0.05\n",
+                "    arch_results.append({\n",
+                "        'Symbol': sym,\n",
+                "        'Squared Returns Lag-1 Autocorr': sq_autocorr,\n",
+                "        'Volatility Clustering Detected?': 'YES' if has_clustering else 'NO',\n",
+                "        'ARCH Implication': 'Mandelbrot clustering (large shocks cluster)' if has_clustering else 'Constant conditional variance'\n",
+                "    })\n",
+                "\n",
+                "df_arch = pd.DataFrame(arch_results)\n",
+                "df_arch"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 6. Hypothesis Testing & Standardized Effect Sizes\n",
+                "\n",
+                "### 6.1 One-Sample $t$-Test on Mean Returns ($H_0: \\mu = 0$)\n",
+                "- **Cohen's $d$ Effect Size**: $\\displaystyle d = \\frac{\\bar{R} - \\mu_0}{s}$\n",
+                "- **Annualized Sharpe Ratio**: $\\displaystyle \\text{SR} = \\frac{\\text{Annualized Return} - R_f}{\\text{Annualized Volatility}}$, with benchmark risk-free rate $R_f = 6.5\\%$ (RBI 91-day T-Bill rate)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "tests_and_effects = []\n",
+                "risk_free_rate = 0.065\n",
+                "\n",
+                "for sym in returns_matrix.columns:\n",
+                "    r = returns_matrix[sym].values\n",
+                "    t_res = stats.ttest_1samp(r, popmean=0.0)\n",
+                "    wilc = stats.wilcoxon(r, alternative='two-sided')\n",
+                "    s = np.std(r, ddof=1)\n",
+                "    mean_r = np.mean(r)\n",
+                "    cohens_d = mean_r / s if s > 0 else 0.0\n",
+                "    \n",
+                "    ann_ret = mean_r * 252\n",
+                "    ann_vol = s * np.sqrt(252)\n",
+                "    sharpe = (ann_ret - risk_free_rate) / ann_vol if ann_vol > 0 else 0.0\n",
+                "    \n",
+                "    tests_and_effects.append({\n",
+                "        'Symbol': sym,\n",
+                "        'Daily Mean (%)': mean_r * 100,\n",
+                "        't-statistic': t_res.statistic,\n",
+                "        't-test p-value': t_res.pvalue,\n",
+                "        'Decision (α=0.05)': 'Reject (μ != 0)' if t_res.pvalue < 0.05 else 'Fail to Reject',\n",
+                "        'Wilcoxon p-val': wilc.pvalue,\n",
+                "        \"Cohen's d\": cohens_d,\n",
+                "        'Effect Magnitude': 'Negligible (|d|<0.2)' if abs(cohens_d) < 0.2 else 'Small (0.2<=|d|<0.5)',\n",
+                "        'Annualized Sharpe (Rf=6.5%)': sharpe\n",
+                "    })\n",
+                "\n",
+                "df_tests = pd.DataFrame(tests_and_effects)\n",
+                "df_tests"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 6.2 Pairwise Pearson Correlation Tests & Fisher $z$ Confidence Intervals\n",
+                "- **Exact Student's $t$ Significance Test** ($H_0: \\rho = 0$):\n",
+                "  $$\\displaystyle t = r \\sqrt{\\frac{n-2}{1 - r^2}} \\sim t_{n-2}$$\n",
+                "- **Fisher $z$-Transformation 95% Confidence Interval**:\n",
+                "  $$\\displaystyle z = \\frac{1}{2} \\ln \\left( \\frac{1 + r}{1 - r} \\right) = \\text{arctanh}(r), \\quad \\text{SE}_z = \\frac{1}{\\sqrt{n-3}}$$\n",
+                "- **Coefficient of Determination ($R^2 = r^2$)**: Proportion of shared variance between assets."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "pairwise_results = []\n",
+                "cols = list(returns_matrix.columns)\n",
+                "n = len(returns_matrix)\n",
+                "\n",
+                "for i in range(len(cols)):\n",
+                "    for j in range(i + 1, len(cols)):\n",
+                "        s1 = cols[i]\n",
+                "        s2 = cols[j]\n",
+                "        r1 = returns_matrix[s1].values\n",
+                "        r2 = returns_matrix[s2].values\n",
+                "        r_val, p_val = stats.pearsonr(r1, r2)\n",
+                "        \n",
+                "        # Fisher z 95% CI\n",
+                "        z = np.arctanh(r_val)\n",
+                "        se_z = 1.0 / np.sqrt(n - 3)\n",
+                "        z_crit = stats.norm.ppf(0.975)\n",
+                "        ci_lower = np.tanh(z - z_crit * se_z)\n",
+                "        ci_upper = np.tanh(z + z_crit * se_z)\n",
+                "        r_sq = r_val ** 2\n",
+                "        \n",
+                "        pairwise_results.append({\n",
+                "            'Pair': f\"{s1} & {s2}\",\n",
+                "            'Pearson r': r_val,\n",
+                "            'p-value': p_val,\n",
+                "            '95% CI for r': f\"[{ci_lower:.3f}, {ci_upper:.3f}]\",\n",
+                "            'R² (Shared Var)': r_sq,\n",
+                "            'Effect Size': 'Large (|r|>=0.5)' if abs(r_val)>=0.5 else ('Medium (0.3<=|r|<0.5)' if abs(r_val)>=0.3 else 'Small/Negligible')\n",
+                "        })\n",
+                "\n",
+                "df_pairs = pd.DataFrame(pairwise_results).sort_values(by='Pearson r', ascending=False).reset_index(drop=True)\n",
+                "print(f\"Total Unique Cross-Asset Pairs (10 C 2): {len(df_pairs)}\")\n",
+                "df_pairs.head(10)"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 7. Diverging Pearson Correlation Heatmap\n",
+                "Visualizing the complete 10×10 correlation structure with divergent palette centered at zero ($0.00$):"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "corr_matrix = returns_matrix.corr(method='pearson')\n",
+                "\n",
+                "plt.figure(figsize=(10, 8))\n",
+                "sns.heatmap(\n",
+                "    corr_matrix, \n",
+                "    annot=True, \n",
+                "    fmt=\".2f\", \n",
+                "    cmap=\"vlag\", \n",
+                "    center=0.0, \n",
+                "    vmin=-1.0, \n",
+                "    vmax=1.0, \n",
+                "    linewidths=0.5,\n",
+                "    cbar_kws={'label': 'Pearson Correlation (r)'}\n",
+                ")\n",
+                "plt.title('10x10 Pearson Correlation Heatmap (Approved NSE Equities)', fontsize=14, fontweight='bold', pad=12)\n",
+                "plt.tight_layout()\n",
+                "plt.show()"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 8. Main Model - Markowitz Modern Portfolio Theory (MPT) Verification\n",
+                "\n",
+                "### 8.1 Analytical Variance Formula vs. Observed Series Sample Variance\n",
+                "$$\\displaystyle \\sigma_p^2 = w_1^2 \\sigma_1^2 + w_2^2 \\sigma_2^2 + 2w_1w_2 \\text{Cov}(R_1, R_2)$$\n",
+                "We test this across 101 allocation weights from $w_1 = 0.0$ to $w_1 = 1.0$ against the empirical sample variance ($ddof=1$) of the linear returns series $R_{p,t} = w_1 R_{1,t} + w_2 R_{2,t}$:"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "sym1 = 'SOLARINDS.NS'\n",
+                "sym2 = 'BAJFINANCE.NS'\n",
+                "\n",
+                "r1 = returns_matrix[sym1]\n",
+                "r2 = returns_matrix[sym2]\n",
+                "\n",
+                "cov_val = r1.cov(r2)  # ddof=1\n",
+                "var1 = r1.var(ddof=1)\n",
+                "var2 = r2.var(ddof=1)\n",
+                "\n",
+                "weights = np.linspace(0.0, 1.0, 101)\n",
+                "port_vols = []\n",
+                "port_returns = []\n",
+                "max_discrepancy = 0.0\n",
+                "\n",
+                "for w1 in weights:\n",
+                "    w2 = 1.0 - w1\n",
+                "    # Analytical Formula Variance\n",
+                "    var_theoretical = (w1**2 * var1) + (w2**2 * var2) + (2 * w1 * w2 * cov_val)\n",
+                "    vol_analytical = np.sqrt(var_theoretical) * np.sqrt(252)\n",
+                "    \n",
+                "    # Observed Return Series Sample Variance\n",
+                "    r_portfolio = (w1 * r1) + (w2 * r2)\n",
+                "    var_observed = r_portfolio.var(ddof=1)\n",
+                "    \n",
+                "    # Discrepancy\n",
+                "    diff = abs(var_theoretical - var_observed)\n",
+                "    if diff > max_discrepancy:\n",
+                "        max_discrepancy = diff\n",
+                "        \n",
+                "    ret_portfolio = ((w1 * r1.mean()) + (w2 * r2.mean())) * 252\n",
+                "    port_vols.append(vol_analytical * 100)\n",
+                "    port_returns.append(ret_portfolio * 100)\n",
+                "\n",
+                "print(f\"Maximum Absolute Discrepancy between Theoretical Formula & Observed Variance: {max_discrepancy:.2e}\")\n",
+                "assert max_discrepancy < 1e-6, \"Proof Failed!\"\n",
+                "print(\"✓ Mathematical Equivalence Proved: Delta < 10^-6 across all weight allocations!\")\n",
+                "\n",
+                "# Plot Two-Stock Portfolio Risk-Return Curve\n",
+                "plt.figure(figsize=(10, 6))\n",
+                "plt.plot(port_vols, port_returns, color='#2563eb', linewidth=2.5, label='Two-Asset Investment Opportunity Set')\n",
+                "plt.scatter([port_vols[0], port_vols[-1]], [port_returns[0], port_returns[-1]], color=['#dc2626', '#16a34a'], s=80, zorder=5)\n",
+                "plt.annotate(f'100% {sym2}', (port_vols[0], port_returns[0]), textcoords=\"offset points\", xytext=(10,-5))\n",
+                "plt.annotate(f'100% {sym1}', (port_vols[-1], port_returns[-1]), textcoords=\"offset points\", xytext=(10,-5))\n",
+                "\n",
+                "# Mark Minimum Variance Portfolio (MVP)\n",
+                "min_idx = np.argmin(port_vols)\n",
+                "plt.scatter(port_vols[min_idx], port_returns[min_idx], color='#d97706', s=140, marker='*', zorder=6, label=f'Minimum Variance Portfolio (w1={weights[min_idx]:.2f}, Vol={port_vols[min_idx]:.1f}%)')\n",
+                "\n",
+                "plt.title(f'Markowitz Portfolio Frontier: {sym1} & {sym2}', fontsize=14, fontweight='bold', pad=12)\n",
+                "plt.xlabel('Annualized Volatility (%)', fontsize=11)\n",
+                "plt.ylabel('Annualized Return (%)', fontsize=11)\n",
+                "plt.legend()\n",
+                "plt.tight_layout()\n",
+                "plt.show()"
+            ]
+        }
+    ],
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        },
+        "language_info": {
+            "codemirror_mode": {
+                "name": "ipython",
+                "version": 3
+            },
+            "file_extension": ".py",
+            "mimetype": "text/x-python",
+            "name": "python",
+            "nbconvert_exporter": "python",
+            "pygments_lexer": "ipython3",
+            "version": "3.12.0"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 4
+}
+
+with open('notebooks/risk_and_correlation_analysis.ipynb', 'w', encoding='utf-8') as f:
+    json.dump(notebook, f, indent=2)
+
+print("Created notebooks/risk_and_correlation_analysis.ipynb successfully!")
